@@ -10,6 +10,7 @@
   <h1>WebSocket Products Test</h1>
   <button id="start">Start Recording & Send</button>
   <button id="stop" disabled>Stop</button>
+  <input type="file" id="image" accept="image/*" />
   <p><strong>Status:</strong> <span id="status">Idle</span></p>
   <pre id="json"></pre>
   <audio id="player" controls></audio>
@@ -17,6 +18,7 @@
   <script>
     const startBtn = document.getElementById('start');
     const stopBtn = document.getElementById('stop');
+    const imageInput = document.getElementById('image');
     const statusSpan = document.getElementById('status');
     const jsonPre = document.getElementById('json');
     const player = document.getElementById('player');
@@ -38,7 +40,6 @@
         jsonPre.textContent = JSON.stringify(msg.payload || {}, null, 2);
         const audioData = msg.data;
         player.src = 'data:audio/wav;base64,' + audioData;
-        // Close after receiving the response
         statusSpan.textContent = 'Response received';
         ws.close();
         startBtn.disabled = false;
@@ -49,7 +50,6 @@
         stopBtn.disabled = true;
       };
 
-      // start recording
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       mediaRecorder = new MediaRecorder(stream);
       mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
@@ -63,11 +63,19 @@
       mediaRecorder.stop();
       mediaRecorder.onstop = async () => {
         statusSpan.textContent = 'Sending audio...';
-        const blob = new Blob(audioChunks, { type: 'audio/wav' });
-        const arrayBuffer = await blob.arrayBuffer();
-        ws.send(arrayBuffer);
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        const audioBuffer = await audioBlob.arrayBuffer();
+        ws.send(audioBuffer);
+
+        // Send image if selected
+        const file = imageInput.files[0];
+        if (file) {
+          const imgBuffer = await file.arrayBuffer();
+          ws.send(imgBuffer);
+        }
+
         audioChunks = [];
-        statusSpan.textContent = 'Audio sent, awaiting response...';
+        statusSpan.textContent = 'Audio (and optional image) sent, awaiting response...';
         stopBtn.disabled = true;
       };
     };

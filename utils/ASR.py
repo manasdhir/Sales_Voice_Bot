@@ -20,7 +20,7 @@ def faster_whisper_asr_bytes(audio_bytes: bytes) -> str:
 
         segments, info = asr_model.transcribe(
             tmp_file.name,
-            language=None,       # 👈 auto-detect
+            language='en',       # 👈 auto-detect
             beam_size=5,
             vad_filter=True
         )

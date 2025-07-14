@@ -3,7 +3,6 @@ import random
 import json
 import base64
 import os
-from typing import List, Dict, Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pathlib import Path
 
@@ -72,141 +71,73 @@ SIMILAR_PRODUCTS = [
     ]
 ]
 
-def get_random_flag_data() -> Dict[str, Any]:
+# Configurable directory for storing user audio
+USER_AUDIO_DIR = Path(os.getenv("USER_AUDIO_DIR", "/tmp/user_audio"))
+USER_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_random_flag_data() -> dict:
     """Generate random flag data (single, comparison, or similar)"""
     flag_types = ["single", "comparison", "similar"]
     flag_type = random.choice(flag_types)
-    
+
     if flag_type == "single":
         product = random.choice(DUMMY_PRODUCTS)
-        return {
-            "type": "product",
-            "flag": "single",
-            "data": product
-        }
-    
-    elif flag_type == "comparison":
-        # Two products for comparison
-        products = random.sample(DUMMY_PRODUCTS, 2)
+        return {"type": "product", "flag": "single", "data": product}
+
+    if flag_type == "comparison":
+        p1, p2 = random.sample(DUMMY_PRODUCTS, 2)
         return {
             "type": "product",
             "flag": "comparison",
-            "data": {
-                "product1": products[0],
-                "product2": products[1],
-                "comparison_reason": "Price difference detected"
-            }
-        }
-    
-    else:  # similar
-        similar_group = random.choice(SIMILAR_PRODUCTS)
-        return {
-            "type": "product",
-            "flag": "similar",
-            "data": {
-                "main_product": random.choice(DUMMY_PRODUCTS),
-                "similar_products": similar_group,
-                "similarity_reason": "Same category products"
-            }
+            "data": {"product1": p1, "product2": p2, "comparison_reason": "Price difference detected"}
         }
 
-def get_audio_file_data(filename: str) -> Dict[str, Any]:
-    """Read and encode audio file to base64"""
-    audio_path = Path(f"/home/manas/walmart_backend/{filename}")
-    
-    if not audio_path.exists():
-        return {
-            "type": "audio",
-            "error": f"Audio file {filename} not found"
-        }
-    
-    try:
-        with open(audio_path, "rb") as audio_file:
-            audio_data = audio_file.read()
-            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
-            
-        return {
-            "type": "audio",
-            "filename": filename,
-            "data": audio_base64,
-            "format": "wav"
-        }
-    except Exception as e:
-        return {
-            "type": "audio",
-            "error": f"Failed to read {filename}: {str(e)}"
-        }
+    # similar
+    group = random.choice(SIMILAR_PRODUCTS)
+    main = random.choice(DUMMY_PRODUCTS)
+    return {
+        "type": "product",
+        "flag": "similar",
+        "data": {"main_product": main, "similar_products": group, "similarity_reason": "Same category products"}
+    }
+
 
 @router.websocket("/products")
 async def websocket_products(websocket: WebSocket):
-    """WebSocket endpoint for streaming products with flags/audio and receiving user audio input."""
+    """WebSocket: on user audio, echo audio back or send audio + JSON flag data."""
     await websocket.accept()
+    try:
+        # 1. Receive initial audio from client
+        msg = await websocket.receive()
+        if msg.get("type") == "websocket.receive" and msg.get("bytes"):
+            audio_bytes = msg["bytes"]
+        else:
+            # Invalid initial message, close with unsupported data
+            await websocket.close(code=1003)
+            return
 
-    # For debug or temporary storage
-    user_audio_dir = Path("/tmp/user_audio")
-    user_audio_dir.mkdir(parents=True, exist_ok=True)
+        # 2. Decide whether to include product JSON
+        include_text = random.choice([True, False])
 
-    async def sender():
+        # 3. Build response
+        audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+        response = {"type": "audio", "data": audio_b64, "format": "wav"}
+
+        if include_text:
+            response["payload"] = get_random_flag_data()
+
+        # 4. Send back the audio (and optional JSON)
+        await websocket.send_text(json.dumps(response))
+
+        # 5. Keep the connection alive until the client disconnects
         while True:
-            await asyncio.sleep(random.uniform(2, 8))
-            try:
-                if random.random() < 0.7:
-                    message = get_random_flag_data()
-                else:
-                    audio_files = ["test audio_hindi.wav", "test audio_english.wav"]
-                    selected_audio = random.choice(audio_files)
-                    message = get_audio_file_data(selected_audio)
-                message["timestamp"] = asyncio.get_event_loop().time()
-                await websocket.send_text(json.dumps(message))
-            except Exception as e:
-                print(f"[Sender] Error: {e}")
+            msg2 = await websocket.receive()
+            if msg2.get("type") == "websocket.disconnect":
                 break
 
-    async def receiver():
-        while True:
-            try:
-                data = await websocket.receive()
-                if "bytes" in data:
-                    # Save received audio blob to disk
-                    filename = f"user_audio_{int(asyncio.get_event_loop().time() * 1000)}.wav"
-                    file_path = user_audio_dir / filename
-                    with open(file_path, "wb") as f:
-                        f.write(data["bytes"])
-                    print(f"[Receiver] Received and saved audio: {file_path}")
-                elif "text" in data:
-                    print(f"[Receiver] Ignoring received text: {data['text']}")
-            except Exception as e:
-                print(f"[Receiver] Error: {e}")
-                break
-
-    try:
-        await asyncio.gather(sender(), receiver())
     except WebSocketDisconnect:
-        print("WebSocket client disconnected.")
-    except Exception as e:
-        print(f"WebSocket error: {e}")
-        await websocket.close()
-
-@router.websocket("/products/test")
-async def websocket_test(websocket: WebSocket):
-    """Test WebSocket endpoint for debugging"""
-    await websocket.accept()
-    
-    try:
-        counter = 0
-        while True:
-            counter += 1
-            message = {
-                "type": "test",
-                "message": f"Test message {counter}",
-                "timestamp": asyncio.get_event_loop().time()
-            }
-            
-            await websocket.send_text(json.dumps(message))
-            await asyncio.sleep(3)  # Send every 3 seconds
-            
-    except WebSocketDisconnect:
-        print("Test WebSocket client disconnected")
-    except Exception as e:
-        print(f"Test WebSocket error: {str(e)}")
+        # Client disconnected normally
+        pass
+    finally:
         await websocket.close()
